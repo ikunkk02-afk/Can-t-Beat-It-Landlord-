@@ -1,0 +1,128 @@
+{
+  "shuffle": {
+    "subtitle": "subtitles.bosslandlord.shuffle",
+    "sounds": [
+      "bosslandlord:shuffle"
+    ]
+  },
+  "deal": {
+    "subtitle": "subtitles.bosslandlord.deal",
+    "sounds": [
+      "bosslandlord:deal"
+    ]
+  },
+  "play": {
+    "subtitle": "subtitles.bosslandlord.play",
+    "sounds": [
+      "bosslandlord:play"
+    ]
+  },
+  "pass": {
+    "subtitle": "subtitles.bosslandlord.pass",
+    "sounds": [
+      "bosslandlord:pass"
+    ]
+  },
+  "bid": {
+    "subtitle": "subtitles.bosslandlord.bid",
+    "sounds": [
+      "bosslandlord:bid"
+    ]
+  },
+  "stake": {
+    "subtitle": "subtitles.bosslandlord.stake",
+    "sounds": [
+      "bosslandlord:stake"
+    ]
+  },
+  "airplane": {
+    "subtitle": "subtitles.bosslandlord.airplane",
+    "sounds": [
+      "bosslandlord:airplane"
+    ]
+  },
+  "bomb": {
+    "subtitle": "subtitles.bosslandlord.bomb",
+    "sounds": [
+      "bosslandlord:bomb"
+    ]
+  },
+  "rocket": {
+    "subtitle": "subtitles.bosslandlord.rocket",
+    "sounds": [
+      "bosslandlord:rocket"
+    ]
+  },
+  "win": {
+    "subtitle": "subtitles.bosslandlord.win",
+    "sounds": [
+      "bosslandlord:win"
+    ]
+  },
+  "loss": {
+    "subtitle": "subtitles.bosslandlord.loss",
+    "sounds": [
+      "bosslandlord:loss"
+    ]
+  },
+  "guest.naochi": {
+    "subtitle": "subtitles.bosslandlord.guest.naochi",
+    "sounds": ["bosslandlord:guest/naochi"]
+  },
+  "guest.gu_zhenxing": {
+    "subtitle": "subtitles.bosslandlord.guest.gu_zhenxing",
+    "sounds": ["bosslandlord:guest/gu_zhenxing"]
+  },
+  "music.game": {
+    "sounds": [
+      {
+        "name": "bosslandlord:music/game_1",
+        "stream": true
+      },
+      {
+        "name": "bosslandlord:music/game_2",
+        "stream": true
+      },
+      {
+        "name": "bosslandlord:music/game_3",
+        "stream": true
+      }
+    ]
+  },
+  "music.intense": {
+    "sounds": [
+      {
+        "name": "bosslandlord:music/intense_1",
+        "stream": true
+      },
+      {
+        "name": "bosslandlord:music/intense_2",
+        "stream": true
+      }
+    ]
+  },
+  "music.victory": {
+    "sounds": [
+      {
+        "name": "bosslandlord:music/victory_1",
+        "stream": false
+      },
+      {
+        "name": "bosslandlord:music/victory_2",
+        "stream": false
+      }
+    ]
+  },
+  "music.defeat": {
+    "sounds": [
+      {
+        "name": "bosslandlord:music/defeat_1",
+        "stream": false
+      },
+      {
+        "name": "bosslandlord:music/defeat_2",
+        "stream": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "bosslandlord:item/challenge_cards"
+  }
+}
