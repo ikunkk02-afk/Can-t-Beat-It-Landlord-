@@ -17,7 +17,7 @@ public final class Packets {
     public static final int START = 0, PLAY = 1, PASS = 2, LEAVE = 3, REOPEN = 4;
     public static final int CLAIM = 5, DECLINE = 6, NORMAL = 7, DOUBLE = 8, SUPER = 9;
     public static final int PICK_GUEST = 10, INVITE_PLAYER = 11, CANCEL_LOBBY = 12;
-    public static final int DUEL_PLAYER = 13, REMATCH = 14, TABLE_PROP = 15;
+    public static final int DUEL_PLAYER = 13, REMATCH = 14, TABLE_PROP = 15, THREE_PLAYERS = 16;
     public static final UUID NONE = new UUID(0, 0);
     // Installed exclusively by the physical-client initializer. No client class loading on a server.
     public static Consumer<CompoundTag> clientReceiver = tag -> {};
@@ -39,7 +39,7 @@ public final class Packets {
         @Override public Type<? extends CustomPacketPayload> type() { return TYPE; }
     }
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("7");
+        var registrar = event.registrar("8");
         registrar.playToServer(Action.TYPE, Action.CODEC, (p, ctx) -> {
             if (ctx.player() instanceof ServerPlayer player) MatchManager.action(player, p);
         });

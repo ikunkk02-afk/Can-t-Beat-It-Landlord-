@@ -174,6 +174,36 @@ public final class LogicTests {
         check(spread(highCardsBySeat) < 100, "No seat accumulates a large advantage over the seeded sample");
     }
 
+    private static void threePlayerChecks() {
+        for (int first = 0; first < 3; first++) {
+            for (int claims = 0; claims < 8; claims++) {
+                var auction = new ThreePlayerAuction(first);
+                int expected = -1;
+                for (int i = 0; i < 3; i++) {
+                    int seat = (first + i) % 3;
+                    boolean claim = (claims & (1 << seat)) != 0;
+                    check(auction.turn() == seat && !auction.decide((seat + 1) % 3, true), "Only the current bidder can act");
+                    check(auction.decide(seat, claim), "Every seat can bid");
+                    if (claim) expected = seat;
+                }
+                check(auction.complete() && auction.candidate() == expected && !auction.decide(first, true),
+                        "The last claim wins, with no candidate if all decline");
+            }
+        }
+        for (int seed = 0; seed < 30; seed++) {
+            var round = new LandlordRound(new Random(seed));
+            round.assignLandlord(2);
+            check(round.turn() == 2 && round.count(2) == 20, "Seat three receives the bottom cards and leads");
+            int moves = 0;
+            while (round.winner() < 0 && moves++ < 170) {
+                int seat = round.turn();
+                check(round.play(seat, round.suggest(seat)).isEmpty(), "Seat-three landlord game plays legal moves");
+            }
+            check(round.winner() >= 0 && round.sameSide(0, round.winner()) == round.sameSide(1, round.winner())
+                    && round.sameSide(2, round.winner()) != round.sameSide(0, round.winner()), "The two farmers share the result");
+        }
+    }
+
     private static int spread(int[] counts) {
         return Math.max(counts[0], Math.max(counts[1], counts[2])) - Math.min(counts[0], Math.min(counts[1], counts[2]));
     }
@@ -361,7 +391,7 @@ public final class LogicTests {
     }
 
     public static void main(String[] args) {
-        ruleExamples(); exhaustiveMoveCoverage(); roundChecks(); auctionChecks(); balancedDealChecks();
+        ruleExamples(); exhaustiveMoveCoverage(); roundChecks(); auctionChecks(); balancedDealChecks(); threePlayerChecks();
         simulatedMatches(); healthChecks(); animationChecks();
         tacticalChecks(); compareStrategies(); propBurstChecks();
         System.out.println("PASS: " + checks + " assertions; no Minecraft process or save was opened.");

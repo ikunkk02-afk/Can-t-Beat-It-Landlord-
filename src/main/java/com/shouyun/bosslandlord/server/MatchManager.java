@@ -69,8 +69,9 @@ public final class MatchManager {
             case Packets.CLAIM, Packets.DECLINE -> {
                 if (m.phase != MatchPhase.AUCTION || packet.revision() != m.revision) return;
                 boolean claim = packet.action() == Packets.CLAIM;
-                if (seat == 0) m.bid(claim);
-                if (seat == 1 && m.duel() && m.auction.step() == LandlordAuction.Step.BOSS_RESPONSE)
+                if (m.threePlayers()) m.threePlayerBid(seat, claim);
+                else if (seat == 0) m.bid(claim);
+                else if (seat == 1 && m.duel() && m.auction.step() == LandlordAuction.Step.BOSS_RESPONSE)
                     m.rivalBid(claim);
             }
             case Packets.NORMAL, Packets.DOUBLE, Packets.SUPER -> {
@@ -229,6 +230,11 @@ public final class MatchManager {
 
     static boolean startDuel(ServerPlayer player, ServerPlayer opponent, DuelStake stake) {
         return startMatch(player, opponent, GuestChoice.NAOCHI, null, stake);
+    }
+
+    static boolean startThreePlayers(ServerPlayer player, ServerPlayer first, ServerPlayer second) {
+        if (first == second || !MatchLobby.nearbyPlayer(player, second)) return false;
+        return startMatch(player, first, GuestChoice.NAOCHI, second, DuelStake.NONE);
     }
 
     private static boolean startMatch(ServerPlayer player, LivingEntity rival, GuestChoice choice, ServerPlayer friend, DuelStake stake) {
@@ -401,6 +407,10 @@ public final class MatchManager {
     }
 
     private static void leave(ServerPlayer player, Match match, String reason) {
+        if (match.threePlayers()) {
+            match.endThreePlayers(player.getScoreboardName() + " 已离桌，本局结束。");
+            return;
+        }
         if (match.rematchBy != null) {
             if (player.hasDisconnected()) match.close(false);
             return;
@@ -459,6 +469,7 @@ public final class MatchManager {
         boolean temporary;
         LandlordRound round = new LandlordRound(new Random());
         LandlordAuction auction = new LandlordAuction();
+        private ThreePlayerAuction threePlayerAuction;
         final List<SeatEntity> seats = new ArrayList<>();
         final long started;
         TableEntity table;
@@ -479,6 +490,9 @@ public final class MatchManager {
         Match(ServerPlayer p, LivingEntity opponent, LivingEntity g, GuestChoice choice, boolean t, Vec3 c, DuelStake stake) {
             player = p; rival = opponent; temporary = t; center = c; level = p.serverLevel();
             people = new LivingEntity[]{p, opponent, g};
+            if (opponent instanceof ServerPlayer && g instanceof ServerPlayer) {
+                threePlayerAuction = new ThreePlayerAuction(level.random.nextInt(3));
+            }
             guestChoice = choice;
             duelStake = stake;
             started = time(p);
@@ -488,6 +502,7 @@ public final class MatchManager {
         }
 
         boolean duel() { return rival instanceof ServerPlayer; }
+        boolean threePlayers() { return threePlayerAuction != null; }
 
         int seatOf(ServerPlayer participant) {
             for (int i = 0; i < people.length; i++) if (people[i] == participant) return i;
@@ -568,8 +583,14 @@ public final class MatchManager {
             if (player.isRemoved() || !player.isAlive() || player.serverLevel() != level || !rival.isAlive()
                     || rival.isRemoved() || rival.level() != level || table == null || table.isRemoved()
                     || seats.stream().anyMatch(Entity::isRemoved)) { close(false); return; }
-            if (people[2] instanceof ServerPlayer friend && (!friend.isAlive() || friend.isRemoved() || friend.hasDisconnected()
-                    || friend.serverLevel() != level || friend.getVehicle() != seats.get(2))) {
+            if (threePlayers()) {
+                for (int seat = 0; seat < people.length; seat++) {
+                    if (unavailable((ServerPlayer)people[seat], seat)) {
+                        endThreePlayers(people[seat].getName().getString() + " 已离桌，本局结束。");
+                        return;
+                    }
+                }
+            } else if (people[2] instanceof ServerPlayer friend && unavailable(friend, 2)) {
                 if (phase == MatchPhase.RESULT) { close(rematchBy == null); return; }
                 replaceFriend(friend);
                 if (closed) return;
@@ -594,7 +615,8 @@ public final class MatchManager {
                 return;
             }
             if (now - started > 20 * 60 * 20) {
-                if (rival instanceof ServerPlayer opponent) {
+                if (threePlayers()) endThreePlayers("三人桌超时，本局结束。");
+                else if (rival instanceof ServerPlayer opponent) {
                     tell(player, "对决超时，牌局结束。");
                     tell(opponent, "对决超时，牌局结束。");
                     close(false);
@@ -607,9 +629,13 @@ public final class MatchManager {
             }
             if (now >= deadline) {
                 switch (phase) {
-                    case SHUFFLE -> enter(MatchPhase.AUCTION, 320, "看手牌，决定是否叫地主");
+                    case SHUFFLE -> {
+                        if (threePlayers()) enter(MatchPhase.AUCTION, Config.TURN_SECONDS.get() * 20L, threePlayerBidPrompt());
+                        else enter(MatchPhase.AUCTION, 320, "看手牌，决定是否叫地主");
+                    }
                     case AUCTION -> {
-                        if (auction.step() == LandlordAuction.Step.BOSS_RESPONSE)
+                        if (threePlayers()) threePlayerBid(threePlayerAuction.turn(), false);
+                        else if (auction.step() == LandlordAuction.Step.BOSS_RESPONSE)
                             rivalBid(!duel() && LandlordAuction.strongHand(round.hand(1)));
                         else bid(false);
                     }
@@ -618,6 +644,11 @@ public final class MatchManager {
                     case RESULT -> {}
                 }
             } else if (phase != MatchPhase.SHUFFLE && (now - started) % 20 == 0) sync(false);
+        }
+
+        private boolean unavailable(ServerPlayer participant, int seat) {
+            return !participant.isAlive() || participant.isRemoved() || participant.hasDisconnected()
+                    || participant.serverLevel() != level || participant.getVehicle() != seats.get(seat);
         }
 
         void enter(MatchPhase next, long ticks, String text) {
@@ -644,11 +675,7 @@ public final class MatchManager {
 
         void rivalBid(boolean rob) {
             if (duel() && !rob && auction.candidate() == -1) {
-                round = new LandlordRound(new Random());
-                auction = new LandlordAuction();
-                dealAt = time(player) + MatchPhase.RIFFLE_TICKS;
-                sound(MatchSounds.SHUFFLE.get(), 1F);
-                enter(MatchPhase.SHUFFLE, MatchPhase.SHUFFLE_TICKS, "双方不叫地主，重新发牌");
+                redeal("双方不叫地主，重新发牌");
                 return;
             }
             if (!auction.bossDecision(rob)) return;
@@ -664,8 +691,36 @@ public final class MatchManager {
             sync(false);
         }
 
+        void threePlayerBid(int seat, boolean claim) {
+            if (!threePlayerAuction.decide(seat, claim)) return;
+            sound(claim ? MatchSounds.BID.get() : MatchSounds.PASS.get(), 1F);
+            if (threePlayerAuction.complete()) {
+                if (threePlayerAuction.candidate() < 0) redeal("三家都不叫地主，重新发牌");
+                else assignLandlord();
+                return;
+            }
+            deadline = time(player) + Config.TURN_SECONDS.get() * 20L;
+            message = threePlayerBidPrompt();
+            revision++;
+            sync(false);
+        }
+
+        private String threePlayerBidPrompt() {
+            return "轮到 " + people[threePlayerAuction.turn()].getName().getString()
+                    + (threePlayerAuction.candidate() < 0 ? " 叫地主" : " 抢地主");
+        }
+
+        private void redeal(String reason) {
+            round = new LandlordRound(new Random());
+            auction = new LandlordAuction();
+            if (threePlayers()) threePlayerAuction = new ThreePlayerAuction(level.random.nextInt(3));
+            dealAt = time(player) + MatchPhase.RIFFLE_TICKS;
+            sound(MatchSounds.SHUFFLE.get(), 1F);
+            enter(MatchPhase.SHUFFLE, MatchPhase.SHUFFLE_TICKS, reason);
+        }
+
         void assignLandlord() {
-            round.assignLandlord(auction.candidate());
+            round.assignLandlord(threePlayers() ? threePlayerAuction.candidate() : auction.candidate());
             if (duel()) beginPlay(people[round.landlord()].getName().getString() + " 成为地主，先出牌");
             else if (round.landlord() == 0) enter(MatchPhase.STAKE, 320, "你拿到了底牌，选择本局赌注");
             else beginPlay(rivalName() + " 成为地主，先出牌");
@@ -745,7 +800,23 @@ public final class MatchManager {
             close(true);
         }
 
+        void endThreePlayers(String reason) {
+            if (phase != MatchPhase.RESULT) {
+                for (LivingEntity entity : people) {
+                    if (entity instanceof ServerPlayer participant && !participant.hasDisconnected()) tell(participant, reason);
+                }
+            }
+            close(false);
+        }
+
         void requestRematch(ServerPlayer requester, int seat) {
+            if (phase == MatchPhase.RESULT && threePlayers()) {
+                ServerPlayer first = (ServerPlayer)people[(seat + 1) % 3];
+                ServerPlayer second = (ServerPlayer)people[(seat + 2) % 3];
+                close(true);
+                if (readyToStart(requester)) MatchLobby.inviteThreeRematch(requester, first, second);
+                return;
+            }
             if (phase != MatchPhase.RESULT || rematchBy != null || (seat != 0 && !(duel() && seat == 1))) return;
             if (seat == 0 ? won : !won) {
                 rematch(requester);
@@ -813,7 +884,9 @@ public final class MatchManager {
             long now = time(player);
             finishAt = now + 130;
             LivingEntity loser = won ? rival : player;
-            if (duel()) {
+            if (threePlayers()) {
+                result = people[round.winner()].getName().getString() + " 出完了手牌 · " + reason;
+            } else if (duel()) {
                 result = reason + " · " + (won ? player : rival).getName().getString() + " 赢得对决";
                 if (duelStake.isItem()) result += "，获得 1 个" + duelStake.title;
                 if (duelStake == DuelStake.HEALTH) {
@@ -826,7 +899,7 @@ public final class MatchManager {
             enter(MatchPhase.RESULT, 130, result);
             tell(player, result);
             if (rival instanceof ServerPlayer opponent) tell(opponent, result);
-            if (people[2] instanceof ServerPlayer friend) tell(friend, friendResult());
+            if (people[2] instanceof ServerPlayer friend) tell(friend, threePlayers() ? result : friendResult());
         }
 
         private boolean friendWon() {
@@ -842,6 +915,7 @@ public final class MatchManager {
             CompoundTag n = new CompoundTag();
             n.putBoolean("active", true); n.putUUID("match", id);
             n.putBoolean("duel", duel());
+            n.putBoolean("threePlayers", threePlayers());
             if (duel()) n.putInt("duelStake", duelStake.ordinal());
             if (flipAt >= 0) n.putLong("flipAt", flipAt);
             if (propFlight != null) {
@@ -855,7 +929,8 @@ public final class MatchManager {
             n.putLong("phaseAt", phaseAt);
             n.putInt("turn", round.turn());
             n.putString("auction", auction.step().name());
-            n.putInt("candidate", auction.candidate());
+            if (threePlayers()) n.putInt("auctionTurn", threePlayerAuction.turn());
+            n.putInt("candidate", threePlayers() ? threePlayerAuction.candidate() : auction.candidate());
             n.putInt("landlord", round.landlord());
             n.putInt("multiplier", multiplier);
             n.putFloat("playerMax", player.getMaxHealth());
@@ -867,7 +942,7 @@ public final class MatchManager {
             n.putBoolean("blastedPlane", blastedPlane);
             n.putInt("leader", round.leader());
             n.putString("message", switch (phase) {
-                case AUCTION -> "房主与 " + rivalName() + " 竞选地主";
+                case AUCTION -> threePlayers() ? message : "房主与 " + rivalName() + " 竞选地主";
                 case STAKE -> "房主正在选择赌注";
                 default -> message.startsWith("你是地主") ? "房主成为地主，先出牌" : message;
             });
@@ -903,7 +978,9 @@ public final class MatchManager {
                 data.putLong("propResetAt", level.getGameTime() + (burst.resetAt() - now));
             }
             if (phase != MatchPhase.SHUFFLE) data.putIntArray("hand", round.hand(seat));
-            if (seat == 0) {
+            if (threePlayers()) {
+                if (phase == MatchPhase.RESULT) data.putBoolean("won", round.sameSide(seat, round.winner()));
+            } else if (seat == 0) {
                 data.putString("message", message);
                 data.putString("result", result);
             } else if (seat == 1) {

@@ -27,6 +27,7 @@ final class GuestSelectionScreen extends Screen {
     private static final int BUTTON_Y = 321, BUTTON_H = 28, BACK_W = 72, CONFIRM_X = 454, CONFIRM_W = 149;
     private static final int DUEL_X = 356, DUEL_W = 92;
     private static final int STAKE_Y = 269, STAKE_PREV_X = 111, STAKE_NEXT_X = 243;
+    private static final int THREE_X = 246, THREE_Y = 17, THREE_W = 108, THREE_H = 26;
     private static final int TEXT = 0xFFFFECD4, MUTED = 0xFFABBCC3, LINE = 0xFF35464C;
     private static final int[] ACCENTS = {0xFFE6C678, 0xFFFFAE69, 0xFF79E1DC, 0xFFA8C9FC};
     private static final GuestChoice[] CHOICES = GuestChoice.values();
@@ -37,6 +38,8 @@ final class GuestSelectionScreen extends Screen {
     private ListTag friends;
     private DuelStake duelStake;
     private int selection, selectedFriendId = -1;
+    private int secondFriendId = -1;
+    private boolean threePlayers;
     private GuestEntity characterPreview;
     private LivingEntity villagerPreview;
     private long sentAt = -1000, selectedAt = Util.getMillis();
@@ -46,11 +49,14 @@ final class GuestSelectionScreen extends Screen {
         update(state);
         DuelStake preferred = DuelStake.byIndex(state.getInt("preferredStake"));
         duelStake = preferred == null ? DuelStake.NONE : preferred;
-        if (duelOnly() || state.getInt("preferredOpponent") >= 0) {
+        threePlayers = state.contains("preferredThird") && state.getInt("preferredThird") >= 0;
+        if (duelOnly() || threePlayers || state.getInt("preferredOpponent") >= 0) {
             selection = FRIENDS;
             int fallback = selectedFriendId;
             selectedFriendId = state.getInt("preferredOpponent");
             if (friendIndex() < 0) selectedFriendId = fallback;
+            if (threePlayers) secondFriendId = state.getInt("preferredThird");
+            updateSecondFriend();
         } else if (!state.getBoolean("nearbyAvailable")) selection = 1;
     }
 
@@ -60,6 +66,7 @@ final class GuestSelectionScreen extends Screen {
         state = next;
         friends = next.getList("friends", Tag.TAG_COMPOUND);
         if (friendIndex() < 0) selectedFriendId = friends.isEmpty() ? -1 : friends.getCompound(0).getInt("entity");
+        updateSecondFriend();
     }
 
     @Override protected void init() {
@@ -80,12 +87,16 @@ final class GuestSelectionScreen extends Screen {
     private int screenX(int x) { return Math.round(left() + x * scale()); }
     private int screenY(int y) { return Math.round(top() + y * scale()); }
     private int friendIndex() {
-        for (int i = 0; i < friends.size(); i++) if (friends.getCompound(i).getInt("entity") == selectedFriendId) return i;
+        return friendIndex(selectedFriendId);
+    }
+    private int friendIndex(int entityId) {
+        for (int i = 0; i < friends.size(); i++) if (friends.getCompound(i).getInt("entity") == entityId) return i;
         return -1;
     }
     private boolean choosingFriend() { return selection == FRIENDS; }
     private boolean duelOnly() { return state.getBoolean("duel"); }
-    private int slotX(int index) { return SLOT_X + (duelOnly() ? 0 : index * SLOT_STEP); }
+    private boolean friendOnly() { return duelOnly() || threePlayers; }
+    private int slotX(int index) { return SLOT_X + (friendOnly() ? 0 : index * SLOT_STEP); }
     private int accent() { return ACCENTS[selection]; }
     private void select(int index) {
         if (selection != index) { selection = index; selectedAt = Util.getMillis(); }
@@ -95,13 +106,55 @@ final class GuestSelectionScreen extends Screen {
         selectedFriendId = friends.getCompound(Math.floorMod(friendIndex() + direction, friends.size())).getInt("entity");
         selectedAt = Util.getMillis();
     }
+
+    private void updateSecondFriend() {
+        if (secondFriendId != selectedFriendId && friendIndex(secondFriendId) >= 0) return;
+        secondFriendId = -1;
+        for (int i = 0; i < friends.size(); i++) {
+            int id = friends.getCompound(i).getInt("entity");
+            if (id != selectedFriendId) {
+                secondFriendId = id;
+                return;
+            }
+        }
+    }
+
+    private void cycleThreeFriend(int direction, boolean second) {
+        if (friends.size() <= 2 || state.getBoolean("waiting")) return;
+        int index = friendIndex(second ? secondFriendId : selectedFriendId);
+        int excluded = second ? selectedFriendId : secondFriendId;
+        int chosen;
+        do {
+            index = Math.floorMod(index + direction, friends.size());
+            chosen = friends.getCompound(index).getInt("entity");
+        } while (chosen == excluded);
+        if (second) secondFriendId = chosen;
+        else {
+            selectedFriendId = chosen;
+            selectedAt = Util.getMillis();
+        }
+    }
+
+    private boolean showThreeButton() { return choosingFriend() && (friends.size() >= 2 || threePlayers); }
+
+    private void toggleThreePlayers() {
+        if (state.getBoolean("waiting")) return;
+        threePlayers = !threePlayers;
+        updateSecondFriend();
+    }
+
     private boolean canConfirm() {
+        if (threePlayers) return friendIndex() >= 0 && friendIndex(secondFriendId) >= 0 && !state.getBoolean("waiting");
         return choosingFriend() ? friendIndex() >= 0 && !state.getBoolean("waiting")
                 : selection != 0 || state.getBoolean("nearbyAvailable");
     }
     private void confirm(boolean duel) {
         if (!canConfirm() || Util.getMillis() - sentAt < 350) return;
         sentAt = Util.getMillis();
+        if (threePlayers) {
+            Packets.request(Packets.THREE_PLAYERS, state.getUUID("match"), 0, new int[]{selectedFriendId, secondFriendId});
+            return;
+        }
         Packets.request(choosingFriend() ? duel ? Packets.DUEL_PLAYER : Packets.INVITE_PLAYER : Packets.PICK_GUEST,
                 state.getUUID("match"), 0, duel ? new int[]{selectedFriendId, duelStake.ordinal()}
                         : new int[]{choosingFriend() ? selectedFriendId : selection});
@@ -123,10 +176,13 @@ final class GuestSelectionScreen extends Screen {
         g.pose().translate(left(), top(), 0);
         g.pose().scale(scale(), scale(), 1);
         g.blit(STAGE, 0, 0, WIDTH, HEIGHT, 0, 0, 1672, 941, 1672, 941);
-        label(g, duelOnly() ? "好友对决" : "选择牌友", DETAILS_X, 22, 2.1F, TEXT);
-        String boss = duelOnly() ? "闹吃补第三席" : font.plainSubstrByWidth("挑战 · " + state.getString("boss"), 218);
+        label(g, threePlayers ? "三人桌" : duelOnly() ? "好友对决" : "选择牌友", DETAILS_X, 22, 2.1F, TEXT);
+        String boss = threePlayers ? "三名玩家 · 友谊局" : duelOnly() ? "闹吃补第三席"
+                : font.plainSubstrByWidth("挑战 · " + state.getString("boss"), 218);
         g.drawString(font, boss, 601 - font.width(boss), 28, MUTED, true);
-        for (int i = duelOnly() ? FRIENDS : 0; i < 4; i++) drawSlot(g, i, x, y);
+        if (showThreeButton()) button(g, threePlayers ? "返回选人" : "三人桌", THREE_X, THREE_Y, THREE_W, THREE_H,
+                !state.getBoolean("waiting"), !threePlayers, x, y);
+        for (int i = friendOnly() ? FRIENDS : 0; i < 4; i++) drawSlot(g, i, x, y);
         drawDetails(g, x, y);
         if (model == null) {
             String unavailable = choosingFriend() ? "等待好友来到附近" : "暂无可预览的生物";
@@ -143,8 +199,9 @@ final class GuestSelectionScreen extends Screen {
         if (choosingFriend()) {
             int index = friendIndex();
             name = index < 0 ? "好友席位" : friends.getCompound(index).getString("name");
-            category = duelOnly() ? "邀请对手" : "好友同桌";
-            details = index < 0 ? "让好友来到附近，即可发送邀请" : "发送邀请，等对方接受后一起开局";
+            category = threePlayers ? "第一位好友" : duelOnly() ? "邀请对手" : "好友同桌";
+            details = threePlayers ? "选择两位好友，两人都接受后开局"
+                    : index < 0 ? "让好友来到附近，即可发送邀请" : "发送邀请，等对方接受后一起开局";
         } else {
             name = selection == 0 && state.getBoolean("nearbyAvailable") ? state.getString("nearbyName") : CHOICES[selection].title().getString();
             category = selection == 0 ? "就地邀请" : "临时牌友";
@@ -160,7 +217,10 @@ final class GuestSelectionScreen extends Screen {
         float titleScale = Math.min(3.4F, 240F / Math.max(1, font.width(name)));
         label(g, name, DETAILS_X, 177, titleScale, TEXT);
         g.drawString(font, details, DETAILS_X, 220, MUTED, false);
-        if (selection == 1 || selection == 2) {
+        if (threePlayers) {
+            drawThreeFriendRow(g, "第一位", selectedFriendId, FRIEND_Y, mouseX, mouseY);
+            drawThreeFriendRow(g, "第二位", secondFriendId, STAKE_Y, mouseX, mouseY);
+        } else if (selection == 1 || selection == 2) {
             g.drawString(font, "自动出牌 · 随时入座", DETAILS_X, 245, TEXT, false);
         } else if (choosingFriend() && friends.size() > 1) {
             button(g, "‹", DETAILS_X, FRIEND_Y, FRIEND_BUTTON, FRIEND_BUTTON, true, false, mouseX, mouseY);
@@ -169,8 +229,20 @@ final class GuestSelectionScreen extends Screen {
         } else if (choosingFriend() && !duelOnly()) {
             g.drawString(font, "等好友回应时，也可以选择临时牌友", DETAILS_X, 245, MUTED, false);
         }
-        if (choosingFriend()) drawDuelStake(g, mouseX, mouseY);
-        g.drawString(font, duelOnly() ? "← → 切换好友   ·   Enter 邀请" : "← → 切换牌友   ·   Enter 确认", DETAILS_X, 298, MUTED, false);
+        if (choosingFriend() && !threePlayers) drawDuelStake(g, mouseX, mouseY);
+        String shortcut = threePlayers ? "← → 第一位   ↑ ↓ 第二位   Enter 邀请"
+                : duelOnly() ? "← → 切换好友   ·   Enter 邀请" : "← → 切换牌友   ·   Enter 确认";
+        g.drawString(font, shortcut, DETAILS_X, 298, MUTED, false);
+    }
+
+    private void drawThreeFriendRow(GuiGraphics g, String seat, int playerId, int y, int mouseX, int mouseY) {
+        boolean enabled = friends.size() > 2 && !state.getBoolean("waiting");
+        g.drawString(font, seat, DETAILS_X, y + 8, MUTED, false);
+        button(g, "‹", STAKE_PREV_X, y, FRIEND_BUTTON, FRIEND_BUTTON, enabled, false, mouseX, mouseY);
+        button(g, "›", STAKE_NEXT_X, y, FRIEND_BUTTON, FRIEND_BUTTON, enabled, false, mouseX, mouseY);
+        int index = friendIndex(playerId);
+        String name = index < 0 ? "暂无人选" : friends.getCompound(index).getString("name");
+        g.drawCenteredString(font, font.plainSubstrByWidth(name, 100), 189, y + 8, TEXT);
     }
 
     private void drawDuelStake(GuiGraphics g, int mouseX, int mouseY) {
@@ -209,13 +281,14 @@ final class GuestSelectionScreen extends Screen {
         if (state.getBoolean("waiting")) status += "  " + state.getInt("remaining") + " 秒";
         if (!status.isEmpty()) {
             int x = DETAILS_X + BACK_W + 12;
-            int limit = choosingFriend() && !duelOnly() ? DUEL_X : CONFIRM_X;
+            int limit = choosingFriend() && !friendOnly() ? DUEL_X : CONFIRM_X;
             g.drawString(font, font.plainSubstrByWidth(status, limit - x - 12), x, BUTTON_Y + 10, accent(), false);
         }
-        if (choosingFriend() && !duelOnly())
+        if (choosingFriend() && !friendOnly())
             button(g, "好友对决", DUEL_X, BUTTON_Y, DUEL_W, BUTTON_H, canConfirm(), false, mouseX, mouseY);
         String confirm = choosingFriend()
-                ? state.getBoolean("waiting") ? "等待回应…" : duelOnly() ? "邀请对决  →" : "邀请同桌  →"
+                ? state.getBoolean("waiting") ? "等待回应…" : threePlayers ? "邀请两位好友  →"
+                : duelOnly() ? "邀请对决  →" : "邀请同桌  →"
                 : "确认入座  →";
         button(g, confirm, CONFIRM_X, BUTTON_Y, CONFIRM_W, BUTTON_H, canConfirm(), true, mouseX, mouseY);
     }
@@ -268,11 +341,24 @@ final class GuestSelectionScreen extends Screen {
     @Override public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (button != 0) return false;
         int x = layoutX(mouseX), y = layoutY(mouseY);
-        for (int i = duelOnly() ? FRIENDS : 0; i < 4; i++)
+        for (int i = friendOnly() ? FRIENDS : 0; i < 4; i++)
             if (inside(x, y, slotX(i), SLOT_Y, SLOT_W, SLOT_H)) { select(i); return true; }
         if (inside(x, y, DETAILS_X, BUTTON_Y, BACK_W, BUTTON_H)) onClose();
         else if (inside(x, y, CONFIRM_X, BUTTON_Y, CONFIRM_W, BUTTON_H)) confirm(duelOnly());
-        else if (choosingFriend() && !duelOnly() && inside(x, y, DUEL_X, BUTTON_Y, DUEL_W, BUTTON_H)) confirm(true);
+        else if (showThreeButton() && inside(x, y, THREE_X, THREE_Y, THREE_W, THREE_H)) toggleThreePlayers();
+        else if (threePlayers) {
+            for (int row : new int[]{FRIEND_Y, STAKE_Y}) {
+                if (inside(x, y, STAKE_PREV_X, row, FRIEND_BUTTON, FRIEND_BUTTON)) {
+                    cycleThreeFriend(-1, row == STAKE_Y);
+                    return true;
+                }
+                if (inside(x, y, STAKE_NEXT_X, row, FRIEND_BUTTON, FRIEND_BUTTON)) {
+                    cycleThreeFriend(1, row == STAKE_Y);
+                    return true;
+                }
+            }
+            return false;
+        } else if (choosingFriend() && !duelOnly() && inside(x, y, DUEL_X, BUTTON_Y, DUEL_W, BUTTON_H)) confirm(true);
         else if (choosingFriend() && inside(x, y, STAKE_PREV_X, STAKE_Y, FRIEND_BUTTON, FRIEND_BUTTON)) cycleStake(-1);
         else if (choosingFriend() && inside(x, y, STAKE_NEXT_X, STAKE_Y, FRIEND_BUTTON, FRIEND_BUTTON)) cycleStake(1);
         else if (choosingFriend() && friends.size() > 1 && inside(x, y, DETAILS_X, FRIEND_Y, FRIEND_BUTTON, FRIEND_BUTTON)) cycleFriend(-1);
@@ -283,10 +369,13 @@ final class GuestSelectionScreen extends Screen {
     @Override public boolean keyPressed(int key, int scan, int modifiers) {
         if (key == GLFW.GLFW_KEY_LEFT || key == GLFW.GLFW_KEY_RIGHT) {
             int direction = key == GLFW.GLFW_KEY_LEFT ? -1 : 1;
-            if (duelOnly()) cycleFriend(direction);
+            if (threePlayers) cycleThreeFriend(direction, false);
+            else if (duelOnly()) cycleFriend(direction);
             else select(Math.floorMod(selection + direction, 4));
         } else if (choosingFriend() && (key == GLFW.GLFW_KEY_UP || key == GLFW.GLFW_KEY_DOWN)) {
-            cycleFriend(key == GLFW.GLFW_KEY_UP ? -1 : 1);
+            int direction = key == GLFW.GLFW_KEY_UP ? -1 : 1;
+            if (threePlayers) cycleThreeFriend(direction, true);
+            else cycleFriend(direction);
         } else if (key == GLFW.GLFW_KEY_ENTER || key == GLFW.GLFW_KEY_KP_ENTER) confirm(duelOnly());
         else return super.keyPressed(key, scan, modifiers);
         return true;

@@ -2,7 +2,7 @@ package com.shouyun.bosslandlord.game;
 
 import java.util.*;
 
-/** Seat 0 is the player, seat 1 the boss, and seat 2 the guest. */
+/** Seat 0 is the host, seat 1 the rival, and seat 2 the third participant. */
 public final class LandlordRound {
     private static final int DEAL_ATTEMPTS = 5;
     private static final int CONTROL_SPREAD = 6;
@@ -81,7 +81,7 @@ public final class LandlordRound {
         return new OpeningQuality(penalty, hasBomb);
     }
     public void assignLandlord(int seat) {
-        if (landlord != -1 || (seat != 0 && seat != 1))
+        if (landlord != -1 || seat < 0 || seat >= hands.size())
             throw new IllegalStateException("Invalid landlord assignment");
         landlord = seat;
         turn = seat;

@@ -71,6 +71,7 @@ public final class LandlordScreen extends Screen {
 
     private boolean watching() { return viewer < 0; }
     private boolean duel() { return state.getBoolean("duel"); }
+    private boolean threePlayers() { return state.getBoolean("threePlayers"); }
     private DuelStake duelStake() {
         DuelStake stake = DuelStake.byIndex(state.getInt("duelStake"));
         return stake == null ? DuelStake.NONE : stake;
@@ -117,7 +118,7 @@ public final class LandlordScreen extends Screen {
         previousCamera = minecraft.getCameraEntity();
         previousType = minecraft.options.getCameraType();
         Vec3 center = new Vec3(state.getDouble("x"), state.getDouble("y"), state.getDouble("z"));
-        float angle = viewer == 1 ? -Mth.PI / 2F : 0F;
+        float angle = viewer == 1 ? -Mth.PI / 2F : viewer == 2 && threePlayers() ? Mth.PI / 2F : 0F;
         Vec3 focus = center.add(new Vec3(0, 1.04, .10).yRot(angle));
         Vec3 eye = center.add(new Vec3(0, 3.7, 2.21).yRot(angle));
         tableCamera = new ArmorStand(minecraft.level, eye.x, eye.y, eye.z);
@@ -193,8 +194,10 @@ public final class LandlordScreen extends Screen {
         g.pose().translate(left(), 0, 0);
         g.pose().scale(scale(), scale(), 1);
 
-        participant(g, viewer == 1 ? TableSeat.GUEST : TableSeat.BOSS, EDGE, false);
-        participant(g, viewer > 0 ? TableSeat.PLAYER : TableSeat.GUEST, WIDTH - EDGE - SEAT_WIDTH, true);
+        boolean thirdSeat = viewer == 2 && threePlayers();
+        participant(g, thirdSeat ? TableSeat.PLAYER : viewer == 1 ? TableSeat.GUEST : TableSeat.BOSS, EDGE, false);
+        participant(g, thirdSeat ? TableSeat.BOSS : viewer > 0 ? TableSeat.PLAYER : TableSeat.GUEST,
+                WIDTH - EDGE - SEAT_WIDTH, true);
         drawWager(g);
         drawBottomCards(g);
         if (watching()) {
@@ -237,6 +240,10 @@ public final class LandlordScreen extends Screen {
     private void drawWager(GuiGraphics g) {
         int x = 167;
         panel(g, x, HEADER_Y, 64, HEADER_HEIGHT, TRIM);
+        if (threePlayers()) {
+            g.drawCenteredString(font, "三人桌", x + 32, HEADER_Y + 9, GOLD);
+            return;
+        }
         if (duel()) {
             DuelStake stake = duelStake();
             g.drawCenteredString(font, stake == DuelStake.NONE ? "好友对决" : "赌" + stake.title, x + 32, HEADER_Y + 9, GOLD);
@@ -248,7 +255,7 @@ public final class LandlordScreen extends Screen {
 
     private String role(int seat) {
         int landlord = state.getInt("landlord");
-        if (landlord < 0) return state.getInt("candidate") == seat ? "地主候选" : seat == 2 ? "农民" : "待定";
+        if (landlord < 0) return state.getInt("candidate") == seat ? "地主候选" : seat == 2 && !threePlayers() ? "农民" : "待定";
         return seat == landlord ? "地主" : "农民";
     }
 
@@ -268,7 +275,8 @@ public final class LandlordScreen extends Screen {
         String role = role(seat);
         if (current) role += " · 出牌";
         else if (state.getBoolean("pass" + seat)) role += " · 不出";
-        else if (placement == TableSeat.BOSS && auction == LandlordAuction.Step.BOSS_RESPONSE) role += " · 叫牌";
+        else if (phase == MatchPhase.AUCTION && (threePlayers() ? state.getInt("auctionTurn") == seat
+                : placement == TableSeat.BOSS && auction == LandlordAuction.Step.BOSS_RESPONSE)) role += " · 叫牌";
         g.drawString(font, name, right ? textEdge - font.width(name) : textEdge, HEADER_Y + 4, TEXT, false);
         g.drawString(font, role, right ? textEdge - font.width(role) : textEdge, HEADER_Y + 14,
                 current || landlord ? accent : MUTED, false);
@@ -405,10 +413,14 @@ public final class LandlordScreen extends Screen {
     }
 
     private String timerLabel() {
-        boolean waitingForPlayer = viewer == 0 && (phase == MatchPhase.STAKE
-                || phase == MatchPhase.AUCTION && auction != LandlordAuction.Step.BOSS_RESPONSE)
-                || viewer == 1 && phase == MatchPhase.AUCTION && auction == LandlordAuction.Step.BOSS_RESPONSE
-                || viewer >= 0 && phase == MatchPhase.PLAY && state.getInt("turn") == viewer;
+        if (watching()) return "";
+        boolean waitingForPlayer = switch (phase) {
+            case AUCTION -> threePlayers() ? state.getInt("auctionTurn") == viewer
+                    : viewer == (auction == LandlordAuction.Step.BOSS_RESPONSE ? 1 : 0);
+            case STAKE -> viewer == 0;
+            case PLAY -> state.getInt("turn") == viewer;
+            default -> false;
+        };
         if (!waitingForPlayer) return "";
         return state.getInt("remaining") + " 秒";
     }
@@ -423,9 +435,10 @@ public final class LandlordScreen extends Screen {
         switch (phase) {
             case AUCTION -> {
                 boolean rivalDecision = auction == LandlordAuction.Step.BOSS_RESPONSE;
-                if (viewer == 2 || viewer == 1 && !rivalDecision) break;
-                boolean rob = auction == LandlordAuction.Step.PLAYER_ROB || viewer == 1 && state.getInt("candidate") == 0;
-                boolean enabled = ready && (viewer == 0 ? !rivalDecision : rivalDecision);
+                if (threePlayers() ? state.getInt("auctionTurn") != viewer : viewer == 2 || viewer == 1 && !rivalDecision) break;
+                boolean rob = threePlayers() ? state.getInt("candidate") >= 0
+                        : auction == LandlordAuction.Step.PLAYER_ROB || viewer == 1 && state.getInt("candidate") == 0;
+                boolean enabled = ready && (threePlayers() || (viewer == 0 ? !rivalDecision : rivalDecision));
                 controls.add(new Control(rob ? "抢地主" : "叫地主", 226, 90, enabled, true, () -> send(Packets.CLAIM)));
                 controls.add(new Control(rob ? "不抢" : "不叫", 324, 90, enabled, false, () -> send(Packets.DECLINE)));
             }
@@ -444,16 +457,18 @@ public final class LandlordScreen extends Screen {
             }
             case RESULT -> {
                 if (state.contains("flipAt")) break;
-                boolean canRematch = viewer != 2;
+                boolean canRematch = viewer != 2 || threePlayers();
                 controls.add(new Control("结算离桌", canRematch ? 213 : 268, 104, ready, !canRematch,
                         () -> send(Packets.LEAVE)));
-                if (canRematch) controls.add(new Control(state.getBoolean("won") ? "再来一局" : "掀桌重来",
+                if (canRematch) controls.add(new Control(threePlayers() || state.getBoolean("won") ? "再来一局" : "掀桌重来",
                         324, 104, ready, true, () -> send(Packets.REMATCH)));
             }
             case SHUFFLE -> {}
         }
         if (phase != MatchPhase.RESULT) {
-            String title = viewer == 2 ? "离席" : Util.getMillis() < concedeUntil ? "确认认输" : "认输";
+            boolean confirming = Util.getMillis() < concedeUntil;
+            String title = threePlayers() ? confirming ? "确认离桌" : "离桌"
+                    : viewer == 2 ? "离席" : confirming ? "确认认输" : "认输";
             controls.add(new Control(title, 474, 48, true, false, this::concede));
         }
         if (canUseProps()) controls.add(new Control("道具", 531, 49, true, false, () -> propsOpen = true));
@@ -601,7 +616,7 @@ public final class LandlordScreen extends Screen {
     }
 
     private void concede() {
-        if (viewer == 2) {
+        if (viewer == 2 && !threePlayers()) {
             send(Packets.LEAVE);
             return;
         }
@@ -610,6 +625,10 @@ public final class LandlordScreen extends Screen {
             send(Packets.LEAVE);
         } else {
             concedeUntil = now + 4000;
+            if (threePlayers()) {
+                localMessage = "再次点击离桌将结束本局";
+                return;
+            }
             int stake = state.getInt("multiplier");
             if (duel()) {
                 DuelStake agreed = duelStake();
